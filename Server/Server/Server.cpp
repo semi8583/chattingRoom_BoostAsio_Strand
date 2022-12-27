@@ -93,16 +93,13 @@ public:
 		roomList.push_back(0); // 0 번방
 		roomList.push_back(1);
 		roomList.push_back(2);
-		for (int i = 0; i < 2; i++)
+		for (int i = 0; i < 1; i++)
 			work.push_back(new boost::asio::io_service::work(ios));
 	}
 	void Start()
 	{
 		cout << "Start Server" << endl;
 		cout << "Creating Threads" << endl;
-
-	/*	for (int i = 0; i < 1; i++)
-			work.push_back(new boost::asio::io_service::work(ios));*/
 
 		for (int i = 0; i < 1; i++) // 여기 개수 만큼 유저 추가 가능
 			threadGroup.create_thread(boost::bind(&Server::WorkerThread, this));
@@ -151,6 +148,7 @@ private:
 		session->sock = sock;
 		session->userIndex = userNum++;
 		session->roomNo = 0;
+		gate.listen();
 		gate.async_accept(*sock, session->ep, m_strand.wrap(boost::bind(&Server::OnAccept, this, _1, session))); //클라이언트 들어오면 아래 함수 실행
 		// async_accept 비동기 승인
 	}
@@ -171,7 +169,7 @@ private:
 		cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << endl;
 		//lock.unlock();
 
-		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session)));
+		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
 		StartAccept();
 
 		osf << session->userIndex << " 번 째 클라이언트 접속" << endl;
@@ -183,13 +181,43 @@ private:
 		builder.Clear();
 	}
 
-	// 동기식 Receive (쓰레드가 각각의 세션을 1:1 담당)
-	void Receive(Session* session)
+	void PacketReceive(Session* session, const boost::system::error_code& ec)
 	{
-		boost::system::error_code ec;
+		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
+
+		if (ec)
+		{
+			cout << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << endl;
+			CloseSession(session);
+			return;
+		}
+		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
+		{
+		}
+		else
+		{
+			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
+			int code = 100;
+			if (session->buffer[1] == 0 || session->buffer[2] == 0 || session->buffer[3] == 0)
+				code = s2cPidAck->code();
+			switch (code)
+			{
+			case Code::CHAT_ECHO:
+				RecvCharEcho(session);
+				break;
+			case Code::VALID_ROOM_NO:
+				RecvCharValidRoomNo(session);
+				break;
+			}
+		}
+	}
+
+	// 동기식 Receive (쓰레드가 각각의 세션을 1:1 담당)
+	void Receive(Session* session, const boost::system::error_code& ec)
+	{
 		//size_t size;
 		//size = session->sock->read_some(boost::asio::buffer(session->buffer, sizeof(session->buffer)), ec);
-		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, error)));
+		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::PacketReceive, this, session, ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
 
 		if (ec)
 		{
@@ -225,8 +253,8 @@ private:
 
 		/*session->buffer[size] = '\0';*/
 		//session->buffer[sizeof(session->buffer)] = '\0';
-		Sleep(100);
-		Receive(session);
+	/*	Sleep(100);
+		Receive(session);*/
 	}
 
 
