@@ -1,4 +1,4 @@
-﻿#define FD_SETSIZE 1028  // 유저 1027명까지 접속 허용
+#define FD_SETSIZE 1028  // 유저 1027명까지 접속 허용
 #include <iostream>
 #include <map>
 #include <cstdlib>
@@ -70,11 +70,12 @@ int userNum = 1;
 class Server
 {
 	boost::asio::io_service ios;
-	vector<boost::asio::io_service::work*> work;
-	boost::asio::io_service::strand m_strand; // 멀티 스레드에서 동일 핸들러로 처리 될 경우 공유 자원에 대한 접근을 제어  == lock객체와 유사
+	vector<boost::asio::io_service::work*> work; // 명시적으로 작업이 있음을 알려주는 역할 => io_service 객체의 run()함수가 종료되지 않도록 해줌 
+	boost::asio::io_service::strand m_strand; // strand는 handler(메시지를 전달 하는 기능) 처리에 대해서 순차적인 처리를 보장해서 공유 자원 접근에 대한 제어를 lock 객체와 유사하게 해 준다
+	//멀티 스레드에서 동일 핸들러로 처리 될 경우 공유 자원에 대한 접근을 제어  == lock객체와 유사
 	// => 같은 핸들러가 겹치기 않게 strand가 알아서 함수 실행 시켜줌 
 	// lock  없이도 멀티 스레드 프로그래밍 가능 
-	boost::asio::ip::tcp::endpoint ep;
+	boost::asio::ip::tcp::endpoint ep; //  주소랑 포트번호 해서 초기화 하면 객체 만들 수 있다 
 	boost::asio::ip::tcp::acceptor gate;
 	std::vector<Session*> sessions;
 	boost::thread_group threadGroup;
@@ -111,7 +112,7 @@ public:
 		/// /////////////
 		/// </summary>
 
-		ios.post(m_strand.wrap(boost::bind(&Server::OpenGate, this)));
+		ios.post(m_strand.wrap(boost::bind(&Server::OpenGate, this)));// strand 비동기 수행 요청 
 
 
 		threadGroup.join_all();// 스레드가 종료 될 때 까지 기다림 
@@ -126,14 +127,13 @@ private:
 	void OpenGate()
 	{
 		boost::system::error_code ec;
-		gate.bind(ep, ec); // bind란 메소드와 객체를 묶어놓는 것 
+		gate.bind(ep, ec); // bind란 메소드와 객체를 묶어놓는 것  => 함수 매핑 
 		if (ec)
 		{
 			cout << "bind failed: " << ec.message() << endl;
 			return;
 		}
 
-		gate.listen();
 		cout << "Gate Opened" << endl;
 
 		StartAccept();
@@ -164,12 +164,10 @@ private:
 			return;
 		}
 
-		//lock.lock();
 		sessions.push_back(session);
 		cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << endl;
-		//lock.unlock();
 
-		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
+		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec))); // strand 비동기 수행 요청 
 		StartAccept();
 
 		osf << session->userIndex << " 번 째 클라이언트 접속" << endl;
@@ -215,8 +213,6 @@ private:
 	// 동기식 Receive (쓰레드가 각각의 세션을 1:1 담당)
 	void Receive(Session* session, const boost::system::error_code& ec)
 	{
-		//size_t size;
-		//size = session->sock->read_some(boost::asio::buffer(session->buffer, sizeof(session->buffer)), ec);
 		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::PacketReceive, this, session, ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
 
 		if (ec)
@@ -225,12 +221,6 @@ private:
 			CloseSession(session);
 			return;
 		}
-		//else if (size == 0)
-		//{
-		//	cout << "[" << boost::this_thread::get_id() << "] peer wants to end " << endl;
-		//	CloseSession(session);
-		//	return;
-		//}
 		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
 		{
 		}
@@ -250,13 +240,7 @@ private:
 				break;
 			}
 		}
-
-		/*session->buffer[size] = '\0';*/
-		//session->buffer[sizeof(session->buffer)] = '\0';
-	/*	Sleep(100);
-		Receive(session);*/
 	}
-
 
 	void OnSend(const boost::system::error_code& ec)
 	{
@@ -274,11 +258,9 @@ private:
 		{
 			if (sessions[i]->sock == session->sock)
 			{
-				//lock.lock();
 				sessions.erase(sessions.begin() + i);
 				osf << TimeResult() << " 포트 번호: " << port << ", 종료" << "\" from server \"" << session->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
 
-				//lock.unlock();
 				break;
 			}
 		}
@@ -286,6 +268,7 @@ private:
 		session->sock->close();
 		delete session;
 	}
+
 	void RecvCharEcho(Session* session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
@@ -318,6 +301,7 @@ private:
 
 		builder.Clear();
 	}
+
 	void RecvCharValidRoomNo(Session* session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
