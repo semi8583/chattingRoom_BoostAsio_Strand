@@ -70,14 +70,14 @@ int userNum = 1;
 class Server
 {
 	boost::asio::io_service ios;
-	vector<boost::asio::io_service::work*> work; // 명시적으로 작업이 있음을 알려주는 역할 => io_service 객체의 run()함수가 종료되지 않도록 해줌 
+	shared_ptr<boost::asio::io_service::work> work; // 명시적으로 작업이 있음을 알려주는 역할 => io_service 객체의 run()함수가 종료되지 않도록 해줌 
 	boost::asio::io_service::strand m_strand; // strand는 handler(메시지를 전달 하는 기능) 처리에 대해서 순차적인 처리를 보장해서 공유 자원 접근에 대한 제어를 lock 객체와 유사하게 해 준다
 	//멀티 스레드에서 동일 핸들러로 처리 될 경우 공유 자원에 대한 접근을 제어  == lock객체와 유사
 	// => 같은 핸들러가 겹치기 않게 strand가 알아서 함수 실행 시켜줌 
 	// lock  없이도 멀티 스레드 프로그래밍 가능 
 	boost::asio::ip::tcp::endpoint ep; //  주소랑 포트번호 해서 초기화 하면 객체 만들 수 있다 
 	boost::asio::ip::tcp::acceptor gate;
-	std::vector<Session*> sessions;
+	std::vector<shared_ptr<Session>> sessions;
 	boost::thread_group threadGroup;
 	boost::mutex lock; // 동시적으로 여러개의 스레드로부터 공유되는 자원을 보호 ==> 해당 핸들러의 종료를 기다리며 lock이 풀리길 기다리며 무의미하게 기다림
 	// 다른 스레드가 해당 변수에 접근하지 못하도록 제한 
@@ -86,7 +86,7 @@ class Server
 public:
 	Server(unsigned short port_num) :  // work는 io_service start 전에 post()에 기술된 핸들러 함수가 먼저 종료되는 상황에서 io_service start를 차 후에 호출하더라도 실제 post의 핸들러 함수는 돌지 않는다. 
 		 // 이를 방지 하기 위해서 항상 block되어 돌도록 하기 위해서 사용 
-		//work(new boost::asio::io_service::work(ios)),
+		work(new boost::asio::io_service::work(ios)),
 		ep(boost::asio::ip::tcp::v4(), port_num), // ip 주소와 포트에 접속 
 		gate(ios, ep.protocol()),
 		m_strand(ios)
@@ -94,15 +94,13 @@ public:
 		roomList.push_back(0); // 0 번방
 		roomList.push_back(1);
 		roomList.push_back(2);
-		for (int i = 0; i < 1; i++)
-			work.push_back(new boost::asio::io_service::work(ios));
 	}
 	void Start()
 	{
 		cout << "Start Server" << endl;
 		cout << "Creating Threads" << endl;
 
-		for (int i = 0; i < 1; i++) // 여기 개수 만큼 유저 추가 가능
+		for (int i = 0; i < 8; i++) // 여기 개수 만큼 유저 추가 가능
 			threadGroup.create_thread(boost::bind(&Server::WorkerThread, this));
 
 		// thread 잘 만들어질때까지 잠시 기다리는 부분
@@ -143,7 +141,7 @@ private:
 	// 비동기식 Accept
 	void StartAccept()
 	{
-		Session* session = new Session();
+		shared_ptr<Session> session = make_shared<Session>();
 		shared_ptr<boost::asio::ip::tcp::socket> sock(new boost::asio::ip::tcp::socket(ios));
 		session->sock = sock;
 		session->userIndex = userNum++;
@@ -153,10 +151,9 @@ private:
 		// async_accept 비동기 승인
 	}
 
-	void OnAccept(const boost::system::error_code& ec, Session* session)
+	void OnAccept(const boost::system::error_code& ec, shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
-
 
 		if (ec)
 		{
@@ -164,7 +161,7 @@ private:
 			return;
 		}
 
-		sessions.push_back(session);
+		sessions.push_back(shared_ptr<Session>(session));
 		cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << endl;
 
 		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec))); // strand 비동기 수행 요청 
@@ -174,58 +171,31 @@ private:
 		builder.Finish(CreateS2C_PID_ACK(builder, 12, 3, session->userIndex));
 		char s2cPidAck[BUF_SIZE] = { 0, };
 		memcpy(&s2cPidAck, builder.GetBufferPointer(), builder.GetSize());
-		session->sock->async_write_some(boost::asio::buffer(s2cPidAck), m_strand.wrap(boost::bind(&Server::OnSend, this, error)));
+		session->sock->async_write_some(boost::asio::buffer(s2cPidAck), m_strand.wrap(boost::bind(&Server::OnSend, this, session, error)));
 		osf << TimeResult() << "[ACK] 포트 번호: " << port << " 유저 " << session->userIndex << " 번째 Client" << endl;
 		builder.Clear();
 	}
 
-	void PacketReceive(Session* session, const boost::system::error_code& ec)
-	{
-		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
-
-		if (ec)
-		{
-			cout << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << endl;
-			CloseSession(session);
-			return;
-		}
-		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
-		{
-		}
-		else
-		{
-			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
-			int code = 100;
-			if (session->buffer[1] == 0 || session->buffer[2] == 0 || session->buffer[3] == 0)
-				code = s2cPidAck->code();
-			switch (code)
-			{
-			case Code::CHAT_ECHO:
-				RecvCharEcho(session);
-				break;
-			case Code::VALID_ROOM_NO:
-				RecvCharValidRoomNo(session);
-				break;
-			}
-		}
-	}
-
 	// 동기식 Receive (쓰레드가 각각의 세션을 1:1 담당)
-	void Receive(Session* session, const boost::system::error_code& ec)
+	void Receive(shared_ptr<Session> session, const boost::system::error_code& ec)
 	{
-		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::PacketReceive, this, session, ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
+		boost::system::error_code r_ec;
 
-		if (ec)
+		//ec먼저 위에 위에껀 아래로 ㅇㅋ 
+		if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
+		{
+			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
+		}
+		else if (ec)
 		{
 			cout << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << endl;
 			CloseSession(session);
 			return;
 		}
-		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
-		{
-		}
 		else
 		{
+			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
+
 			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
 			int code = 100;
 			if (session->buffer[1] == 0 || session->buffer[2] == 0 || session->buffer[3] == 0)
@@ -242,34 +212,38 @@ private:
 		}
 	}
 
-	void OnSend(const boost::system::error_code& ec)
-	{
+	void OnSend(shared_ptr<Session> session, const boost::system::error_code& ec)
+	{// 대응이 겹쳤을 때 원할하게 함 => shared_ptr
 		if (ec)
 		{
 			cout << "[" << boost::this_thread::get_id() << "] async_write_some failed: " << ec.message() << endl;
+			CloseSession(session);
 			return;
 		}
 	}
 
-	void CloseSession(Session* session)
+	void CloseSession(shared_ptr<Session> session)
 	{
+		if (session.use_count() > 0)
+		{// 참조 개수 출력 
 		// if session ends, close and erase
-		for (int i = 0; i < sessions.size(); i++)
-		{
-			if (sessions[i]->sock == session->sock)
+			for (int i = 0; i < sessions.size(); i++)
 			{
-				sessions.erase(sessions.begin() + i);
-				osf << TimeResult() << " 포트 번호: " << port << ", 종료" << "\" from server \"" << session->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
+				if (sessions[i]->sock == session->sock)
+				{
+					sessions.erase(sessions.begin() + i);
+					osf << TimeResult() << " 포트 번호: " << port << ", 종료" << "\" from server \"" << session->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
 
-				break;
+					break;
+				}
 			}
-		}
 
-		session->sock->close();
-		delete session;
+			session->sock->close();
+			//delete session;
+		}
 	}
 
-	void RecvCharEcho(Session* session)
+	void RecvCharEcho(shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 		auto c2sEchoReq = GetC2S_CHATECHO_REQ(session->buffer);
@@ -292,7 +266,7 @@ private:
 		{
 			if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo)
 			{
-				sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, _1)));
+				sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 			}
 		}
 
@@ -302,7 +276,7 @@ private:
 		builder.Clear();
 	}
 
-	void RecvCharValidRoomNo(Session* session)
+	void RecvCharValidRoomNo(shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 
@@ -329,7 +303,7 @@ private:
 			{
 				if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo)
 				{
-					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, _1)));
+					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 				}
 			}
 
@@ -351,7 +325,7 @@ private:
 			{
 				if (k == CurrentUserPid)
 				{
-					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, _1)));
+					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 				}
 			}
 
