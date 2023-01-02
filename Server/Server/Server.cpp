@@ -53,6 +53,12 @@ enum Code
 	VALID_ROOM_NO
 };
 
+enum RoomResult
+{
+	FAILED_ROOM,
+	SUCCESSED_ROOM
+};
+
 struct Session
 {
 	shared_ptr<boost::asio::ip::tcp::socket> sock; // 소켓은 프로토콜 정보밖에 없는 객체 
@@ -172,8 +178,7 @@ private:
 		char s2cPidAck[BUF_SIZE] = { 0, };
 		memcpy(&s2cPidAck, builder.GetBufferPointer(), builder.GetSize());
 		session->sock->async_write_some(boost::asio::buffer(s2cPidAck), m_strand.wrap(boost::bind(&Server::OnSend, this, session, error)));
-		osf << TimeResult() << "[ACK] 포트 번호: " << port << " 유저 " << session->userIndex << " 번째 Client" << endl;
-		builder.Clear();
+		osf << TimeResult() << " [ACK] 포트 번호: " << port << " 유저 " << session->userIndex << " 번째 Client" << endl;
 	}
 
 	// 동기식 Receive (쓰레드가 각각의 세션을 1:1 담당)
@@ -181,21 +186,19 @@ private:
 	{
 		boost::system::error_code r_ec;
 
+		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
 		//ec먼저 위에 위에껀 아래로 ㅇㅋ 
-		if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
-		{
-			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
-		}
-		else if (ec)
+		if (ec)
 		{
 			cout << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << endl;
 			CloseSession(session);
 			return;
 		}
+		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
+		{
+		}
 		else
 		{
-			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); // 유저한테 패킷 받을 때 마다 OnSend 이 함수로 감 => 이 함수를 이용 해라
-
 			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
 			int code = 100;
 			if (session->buffer[1] == 0 || session->buffer[2] == 0 || session->buffer[3] == 0)
@@ -247,7 +250,7 @@ private:
 	{
 		flatbuffers::FlatBufferBuilder builder;
 		auto c2sEchoReq = GetC2S_CHATECHO_REQ(session->buffer);
-		builder.Finish(CreateS2C_CHATECHO_NTY(builder, c2sEchoReq->size(), c2sEchoReq->code(), c2sEchoReq->userIdx(), builder.CreateString(c2sEchoReq->msg()->c_str())));
+		builder.Finish(CreateS2C_CHATECHO_NTY(builder, c2sEchoReq->size(), 1, c2sEchoReq->userIdx(), builder.CreateString(c2sEchoReq->msg()->c_str())));
 		auto s2cEchoNty = GetS2C_CHATECHO_NTY(builder.GetBufferPointer());
 
 		for (int k = 0; k < sessions.size(); k++)// 
@@ -264,16 +267,28 @@ private:
 
 		for (int k = 0; k < sessions.size(); k++)
 		{
-			if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo)
+			if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo && sessions[k] != sessions[CurrentUserPid])
 			{
 				sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 			}
 		}
 
-		osf << TimeResult() << "[NTY]  포트 번호: " << port << ", [send] msg received. 전체 사이즈 : \"" << s2cEchoNty->size() << "\" , Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cEchoNty->code()  << "\" , 문자열: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
-		memset(sessions[CurrentUserPid]->buffer, 0, builder.GetSize());
+		osf << TimeResult() << " [NTY]  포트 번호: " << port << ", [send] msg received. 전체 사이즈 : \"" << s2cEchoNty->size() << "\" , Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cEchoNty->code()  << "\" , 문자열: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
 
 		builder.Clear();
+
+		builder.Finish(CreateS2C_CHATECHO_ACK(builder, c2sEchoReq->size(), 5, 1, builder.CreateString(c2sEchoReq->msg()->c_str())));
+		auto s2cEchoAck = GetS2C_CHATECHO_ACK(builder.GetBufferPointer());
+
+		memcpy(&sessions[CurrentUserPid]->buffer, builder.GetBufferPointer(), builder.GetSize());
+
+		sessions[CurrentUserPid]->bufferSize = builder.GetSize();
+
+		sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
+
+		osf << TimeResult() << " [ACK]  포트 번호: " << port << ", [send] msg received. 전체 사이즈 : \"" << s2cEchoAck->size() << "\" , Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cEchoAck->code() << "\" , 문자열: \"" << s2cEchoAck->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
+		
+		memset(&sessions[CurrentUserPid]->buffer, 0, 3000);
 	}
 
 	void RecvCharValidRoomNo(shared_ptr<Session> session)
@@ -297,22 +312,31 @@ private:
 			sessions[CurrentUserPid]->bufferSize = s2cRoomNty->size();
 			memcpy(&sessions[CurrentUserPid]->buffer, builder.GetBufferPointer(), builder.GetSize());
 
-			osf << TimeResult() << "포트 번호: " << port << ", [recv] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << 1 << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
+			osf << TimeResult() << "포트 번호: " << port << ", [recv] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
 
 			for (int k = 0; k < sessions.size(); k++)
 			{
-				if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo)
+				if (sessions[k]->roomNo == sessions[CurrentUserPid]->roomNo && sessions[k] != sessions[CurrentUserPid])
 				{
 					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 				}
 			}
+			                                                                                       
+			osf << TimeResult() << " [NTY] 포트 번호: " << port << ", [send] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력		
 
-			osf << TimeResult() << "[NTY] 포트 번호: " << port << ", [send] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << 1 << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력		
+			builder.Clear();
+			builder.Finish(CreateS2C_ROOM_ENTER_ACK(builder, c2sRoomReq->size(), 4, c2sRoomReq->roomNo(), RoomResult::SUCCESSED_ROOM)); // code 번호 변경
+			auto s2cRoomAck = GetS2C_ROOM_ENTER_ACK(builder.GetBufferPointer());
+			memcpy(&sessions[CurrentUserPid]->buffer, builder.GetBufferPointer(), builder.GetSize());
+
+			sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
+
+			osf << TimeResult() << " [ACK] 포트 번호: " << port << ", [send] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력	
 		}
 		else // 방 번호가 존재 하지 않을 때  
 		{
 			builder.Clear();
-			builder.Finish(CreateS2C_ROOM_ENTER_ACK(builder, c2sRoomReq->size(), 4, c2sRoomReq->roomNo(), 0)); // code 번호 변경
+			builder.Finish(CreateS2C_ROOM_ENTER_ACK(builder, c2sRoomReq->size(), 4, c2sRoomReq->roomNo(), RoomResult::FAILED_ROOM)); // code 번호 변경
 			auto s2cRoomAck = GetS2C_ROOM_ENTER_ACK(builder.GetBufferPointer());
 
 			sessions[CurrentUserPid]->roomNo = 0;
@@ -321,19 +345,12 @@ private:
 
 			osf << TimeResult() << "포트 번호: " << port << ", [recv] msg received. 총 버퍼 사이즈 : \"" << s2cRoomAck->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomAck->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
 
-			for (int k = 0; k < sessions.size(); k++)
-			{
-				if (k == CurrentUserPid)
-				{
-					sessions[k]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
-				}
-			}
+			sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 
-			osf << TimeResult() << "[ACK] 포트 번호: " << port << ", [send] msg received. 총 버퍼 사이즈 : \"" << s2cRoomAck->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomAck->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력		
+			osf << TimeResult() << " [ACK] 포트 번호: " << port << ", [send] msg received. 총 버퍼 사이즈 : \"" << s2cRoomAck->size() << "\" ,Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomAck->code() << "\" , Result(1: 방 입장 성공, 0: 방 입장 실패): \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력		
 
 		}
-		builder.ReleaseBufferPointer();
-		builder.Clear();
+		memset(&sessions[CurrentUserPid]->buffer, 0, 3000);
 	}
 };
 
