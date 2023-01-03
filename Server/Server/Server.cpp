@@ -80,7 +80,7 @@ class Server
 	std::vector<std::shared_ptr<Session>> sessions;
 	boost::thread_group threadGroup;
 	boost::mutex lock;
-	boost::system::error_code error;
+	std::error_code error;
 
 public:
 	Server(unsigned short port_num) : 
@@ -142,7 +142,7 @@ private:
 		gate.async_accept(*sock, session->ep, m_strand.wrap(boost::bind(&Server::OnAccept, this, _1, session))); 
 	}
 
-	void OnAccept(const boost::system::error_code& ec, std::shared_ptr<Session> session)
+	void OnAccept(const std::error_code& ec, std::shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 
@@ -155,7 +155,7 @@ private:
 		sessions.push_back(std::shared_ptr<Session>(session));
 		std::cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << std::endl;
 
-		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec))); 
+		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, error))); 
 		StartAccept();
 
 		osf << session->userIndex << " st client access" << std::endl;
@@ -176,8 +176,7 @@ private:
 		}
 		else
 		{
-			boost::system::error_code r_ec;
-			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec)));
+			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
 
 			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
 			int code = 100;
@@ -193,6 +192,7 @@ private:
 				break;
 			}
 		}
+		memset(session->buffer, 0, 3000);
 	}
 
 	void OnSend(std::shared_ptr<Session> session, const boost::system::error_code& ec)
@@ -230,7 +230,7 @@ private:
 		builder.Finish(CreateS2C_CHATECHO_NTY(builder, c2sEchoReq->size(), 1, c2sEchoReq->userIdx(), builder.CreateString(c2sEchoReq->msg()->c_str())));
 		auto s2cEchoNty = GetS2C_CHATECHO_NTY(builder.GetBufferPointer());
 
-		for (int k = 0; k < sessions.size(); k++)// 
+		for (int k = 0; k < sessions.size(); k++)
 		{
 			if (sessions[k]->userIndex == s2cEchoNty->userIdx())
 				CurrentUserPid = k;
