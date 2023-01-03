@@ -28,12 +28,12 @@
 int CurrentUserPid = 0;
 CHAR port[10] = { 0, };// = "3587";
 
-ofstream file;
-ostreamFork osf(file, cout);
+std::ofstream file;
+ostreamFork osf(file, std::cout);
 
 std::vector<int> roomList;
 
-string TimeResult()
+std::string TimeResult()
 {
 	time_t timer = time(NULL);
 	struct tm t;
@@ -59,7 +59,7 @@ enum RoomResult
 
 struct Session
 {
-	shared_ptr<boost::asio::ip::tcp::socket> sock; 
+	std::shared_ptr<boost::asio::ip::tcp::socket> sock;
 	boost::asio::ip::tcp::endpoint ep;
 	int userIndex;
 	int bufferSize;
@@ -73,11 +73,11 @@ int userNum = 1;
 class Server
 {
 	boost::asio::io_service ios;
-	shared_ptr<boost::asio::io_service::work> work; 
+	std::shared_ptr<boost::asio::io_service::work> work;
 	boost::asio::io_service::strand m_strand;
 	boost::asio::ip::tcp::endpoint ep; 
 	boost::asio::ip::tcp::acceptor gate;
-	std::vector<shared_ptr<Session>> sessions;
+	std::vector<std::shared_ptr<Session>> sessions;
 	boost::thread_group threadGroup;
 	boost::mutex lock;
 	boost::system::error_code error;
@@ -95,14 +95,14 @@ public:
 	}
 	void Start()
 	{
-		cout << "Start Server" << endl;
-		cout << "Creating Threads" << endl;
+		std::cout << "Start Server" << std::endl;
+		std::cout << "Creating Threads" << std::endl;
 
 		for (int i = 0; i < 8; i++)
 			threadGroup.create_thread(boost::bind(&Server::WorkerThread, this));
 
-		this_thread::sleep_for(chrono::milliseconds(100));
-		cout << "Threads Created" << endl;
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		std::cout << "Threads Created" << std::endl;
 
 		ios.post(m_strand.wrap(boost::bind(&Server::OpenGate, this)));
 
@@ -121,20 +121,20 @@ private:
 		gate.bind(ep, ec);
 		if (ec)
 		{
-			cout << "bind failed: " << ec.message() << endl;
+			std::cout << "bind failed: " << ec.message() << std::endl;
 			return;
 		}
 
-		cout << "Gate Opened" << endl;
+		std::cout << "Gate Opened" << std::endl;
 
 		StartAccept();
-		cout << "[" << boost::this_thread::get_id() << "]" << " Start Accepting" << endl;
+		std::cout << "[" << boost::this_thread::get_id() << "]" << " Start Accepting" << std::endl;
 	}
 
 	void StartAccept()
 	{
-		shared_ptr<Session> session = make_shared<Session>();
-		shared_ptr<boost::asio::ip::tcp::socket> sock(new boost::asio::ip::tcp::socket(ios));
+		std::shared_ptr<Session> session = std::make_shared<Session>();
+		std::shared_ptr<boost::asio::ip::tcp::socket> sock(new boost::asio::ip::tcp::socket(ios));
 		session->sock = sock;
 		session->userIndex = userNum++;
 		session->roomNo = 0;
@@ -142,38 +142,38 @@ private:
 		gate.async_accept(*sock, session->ep, m_strand.wrap(boost::bind(&Server::OnAccept, this, _1, session))); 
 	}
 
-	void OnAccept(const boost::system::error_code& ec, shared_ptr<Session> session)
+	void OnAccept(const boost::system::error_code& ec, std::shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 
 		if (ec)
 		{
-			cout << "accept failed: " << ec.message() << endl;
+			std::cout << "accept failed: " << ec.message() << std::endl;
 			return;
 		}
 
-		sessions.push_back(shared_ptr<Session>(session));
-		cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << endl;
+		sessions.push_back(std::shared_ptr<Session>(session));
+		std::cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << std::endl;
 
 		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, ec))); 
 		StartAccept();
 
-		osf << session->userIndex << " st client access" << endl;
+		osf << session->userIndex << " st client access" << std::endl;
 		builder.Finish(CreateS2C_PID_ACK(builder, 12, 3, session->userIndex));
 		char s2cPidAck[BUF_SIZE] = { 0, };
 		memcpy(&s2cPidAck, builder.GetBufferPointer(), builder.GetSize());
 		session->sock->async_write_some(boost::asio::buffer(s2cPidAck), m_strand.wrap(boost::bind(&Server::OnSend, this, session, error)));
-		osf << TimeResult() << " [ACK] Port No: " << port << " User " << session->userIndex << " st client" << endl;
+		osf << TimeResult() << " [ACK] Port No: " << port << " User " << session->userIndex << " st client" << std::endl;
 	}
 
-	void Receive(shared_ptr<Session> session, const boost::system::error_code& ec)
+	void Receive(std::shared_ptr<Session> session, const boost::system::error_code& ec)
 	{
 		boost::system::error_code r_ec;
 
 		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); 
 		if (ec)
 		{
-			cout << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << endl;
+			osf << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << std::endl;
 			CloseSession(session);
 			return;
 		}
@@ -198,17 +198,17 @@ private:
 		}
 	}
 
-	void OnSend(shared_ptr<Session> session, const boost::system::error_code& ec)
+	void OnSend(std::shared_ptr<Session> session, const boost::system::error_code& ec)
 	{
 		if (ec)
 		{
-			cout << "[" << boost::this_thread::get_id() << "] async_write_some failed: " << ec.message() << endl;
+			osf << "[" << boost::this_thread::get_id() << "] async_write_some failed: " << ec.message() << std::endl;
 			CloseSession(session);
 			return;
 		}
 	}
 
-	void CloseSession(shared_ptr<Session> session)
+	void CloseSession(std::shared_ptr<Session> session)
 	{
 		if (session.use_count() > 0)
 		{
@@ -217,7 +217,7 @@ private:
 				if (sessions[i]->sock == session->sock)
 				{
 					sessions.erase(sessions.begin() + i);
-					osf << TimeResult() << " Port No : " << port << ", Closed" << "\" from server \"" << session->userIndex << "\" st Client" << endl;
+					osf << TimeResult() << " Port No : " << port << ", Closed" << "\" from server \"" << session->userIndex << "\" st Client" << std::endl;
 
 					break;
 				}
@@ -226,7 +226,7 @@ private:
 		}
 	}
 
-	void RecvCharEcho(shared_ptr<Session> session)
+	void RecvCharEcho(std::shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 		auto c2sEchoReq = GetC2S_CHATECHO_REQ(session->buffer);
@@ -243,7 +243,7 @@ private:
 		sessions[CurrentUserPid]->bufferSize = builder.GetSize();
 		sessions[CurrentUserPid]->userIndex = s2cEchoNty->userIdx();
 
-		osf << TimeResult() << "Port No. : " << port << ", msg received. Total size : \"" << s2cEchoNty->size() << "\" , Code: \"" << s2cEchoNty->code() <<  "\" , String: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;
+		osf << TimeResult() << "Port No. : " << port << ", msg received. Total size : \"" << s2cEchoNty->size() << "\" , Code: \"" << s2cEchoNty->code() <<  "\" , String: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;
 
 		for (int k = 0; k < sessions.size(); k++)
 		{
@@ -253,7 +253,7 @@ private:
 			}
 		}
 
-		osf << TimeResult() << " [NTY]  Port No. : " << port << ", [send] msg received. Total Size : \"" << s2cEchoNty->size() << "\" , Code: \"" << s2cEchoNty->code()  << "\" , String: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;
+		osf << TimeResult() << " [NTY]  Port No. : " << port << ", [send] msg received. Total Size : \"" << s2cEchoNty->size() << "\" , Code: \"" << s2cEchoNty->code()  << "\" , String: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;
 
 		builder.Clear();
 
@@ -266,12 +266,12 @@ private:
 
 		sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 
-		osf << TimeResult() << " [ACK] Port No. : " << port << ", [send] msg received. Total Size : \"" << s2cEchoAck->size() << "\" , Code: \"" << s2cEchoAck->code() << "\" , String: \"" << s2cEchoAck->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;
+		osf << TimeResult() << " [ACK] Port No. : " << port << ", [send] msg received. Total Size : \"" << s2cEchoAck->size() << "\" , Code: \"" << s2cEchoAck->code() << "\" , String: \"" << s2cEchoAck->msg()->c_str() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;
 		
 		memset(&sessions[CurrentUserPid]->buffer, 0, 3000);
 	}
 
-	void RecvCharValidRoomNo(shared_ptr<Session> session)
+	void RecvCharValidRoomNo(std::shared_ptr<Session> session)
 	{
 		flatbuffers::FlatBufferBuilder builder;
 
@@ -292,7 +292,7 @@ private:
 			sessions[CurrentUserPid]->bufferSize = s2cRoomNty->size();
 			memcpy(&sessions[CurrentUserPid]->buffer, builder.GetBufferPointer(), builder.GetSize());
 
-			osf << TimeResult() << "Port No: " << port << ", [recv] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;
+			osf << TimeResult() << "Port No: " << port << ", [recv] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;
 
 			for (int k = 0; k < sessions.size(); k++)
 			{
@@ -302,7 +302,7 @@ private:
 				}
 			}
 			                                                                                       
-			osf << TimeResult() << " [NTY] Port No : " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" st Client" << endl;	
+			osf << TimeResult() << " [NTY] Port No : " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" st Client" << std::endl;	
 
 			builder.Clear();
 			builder.Finish(CreateS2C_ROOM_ENTER_ACK(builder, c2sRoomReq->size(), 4, c2sRoomReq->roomNo(), RoomResult::SUCCESSED_ROOM)); 
@@ -311,7 +311,7 @@ private:
 
 			sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 
-			osf << TimeResult() << " [ACK] Port No: " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" st Client" << endl;
+			osf << TimeResult() << " [ACK] Port No: " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomNty->size() << "\" ,Code: \"" << s2cRoomNty->code() << "\" , Result: \"" << RoomResult::SUCCESSED_ROOM << "\" , RoomNo: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" st Client" << std::endl;
 		}
 		else 
 		{
@@ -323,11 +323,11 @@ private:
 			sessions[CurrentUserPid]->bufferSize = s2cRoomAck->size();
 			memcpy(&sessions[CurrentUserPid]->buffer, builder.GetBufferPointer(), builder.GetSize());
 
-			osf << TimeResult() << "Port No: " << port << ", [recv] msg received. Total Buffer Size : \"" << s2cRoomAck->size() << "\" ,Code: \"" << s2cRoomAck->code() << "\" , Result: \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;
+			osf << TimeResult() << "Port No: " << port << ", [recv] msg received. Total Buffer Size : \"" << s2cRoomAck->size() << "\" ,Code: \"" << s2cRoomAck->code() << "\" , Result: \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;
 
 			sessions[CurrentUserPid]->sock->async_write_some(boost::asio::buffer(sessions[CurrentUserPid]->buffer), m_strand.wrap(boost::bind(&Server::OnSend, this, sessions[CurrentUserPid], error)));
 
-			osf << TimeResult() << " [ACK] Port No: " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomAck->size() << "\" ,Code: \"" << s2cRoomAck->code() << "\" , Result: \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << endl;	
+			osf << TimeResult() << " [ACK] Port No: " << port << ", [send] msg received. Total Buffer Size : \"" << s2cRoomAck->size() << "\" ,Code: \"" << s2cRoomAck->code() << "\" , Result: \"" << s2cRoomAck->result() << "\" , RoomNo: \"" << sessions[CurrentUserPid]->roomNo << "\" from server \"" << sessions[CurrentUserPid]->userIndex << "\" st Client" << std::endl;	
 
 		}
 		memset(&sessions[CurrentUserPid]->buffer, 0, 3000);
@@ -336,16 +336,16 @@ private:
 
 int main(void)
 {
-	file.open("C:\\Users\\secrettown\\source\\repos\\Server\\Server\\log.txt", ios_base::out | ios_base::app);
+	file.open(".\\log.txt", std::ios_base::out | std::ios_base::app);
 
 	roomList.push_back(0);
 	roomList.push_back(1);
 	roomList.push_back(2);
 	char c;
-	ifstream fin("C:\\Users\\secrettown\\source\\repos\\chattingRoom_BoostAsioStrand\\Server\\x64\\Debug\\port.txt");
+	std::ifstream fin(".\\port.txt");
 	if (fin.fail())
 	{
-		osf << "Port File not exists" << endl;
+		osf << "Port File not exists" << std::endl;
 		return 0;
 	}
 	int i = 0;
