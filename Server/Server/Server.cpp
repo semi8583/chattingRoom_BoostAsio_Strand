@@ -168,20 +168,17 @@ private:
 
 	void Receive(std::shared_ptr<Session> session, const boost::system::error_code& ec)
 	{
-		boost::system::error_code r_ec;
-
-		session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec))); 
 		if (ec)
 		{
 			osf << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << std::endl;
 			CloseSession(session);
 			return;
 		}
-		else if (session->buffer[0] == 0 && session->buffer[1] == 0 && session->buffer[2] == 0)
-		{
-		}
 		else
 		{
+			boost::system::error_code r_ec;
+			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, r_ec)));
+
 			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
 			int code = 100;
 			if (session->buffer[1] == 0 || session->buffer[2] == 0 || session->buffer[3] == 0)
