@@ -8,7 +8,6 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/thread.hpp>
 #include <string.h>
-using boost::asio::ip::tcp;
 #define BUF_SIZE 512
 #include <fstream>
 #include <string>
@@ -343,7 +342,7 @@ int main(void)
 	roomList.push_back(1);
 	roomList.push_back(2);
 	char c;
-	ifstream fin("C:\\Users\\secrettown\\source\\repos\\chattingRoom_BoostAsioStrand\\Server\\Server\\port.txt");
+	ifstream fin("C:\\Users\\secrettown\\source\\repos\\chattingRoom_BoostAsioStrand\\Server\\x64\\Debug\\port.txt");
 	if (fin.fail())
 	{
 		osf << "Port File not exists" << endl;
