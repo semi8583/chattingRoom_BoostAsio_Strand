@@ -45,6 +45,7 @@ boost::system::error_code error;
 
 bool mainLoop = false;
 bool mainFinish = true;
+bool receiveLoop = true;
 
 int pid;
 
@@ -113,6 +114,7 @@ INT main(int argc, char* argv[])
 			{
 				mainLoop = false;
 				mainFinish = false;
+				receiveLoop = false;
 			}
 			else
 			{
@@ -305,11 +307,12 @@ void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
 	if (ec)
 	{
 		throw boost::system::system_error(ec);
+		return;
 	}
 	else
 	{
-		boost::system::error_code r_ec;
-		hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, r_ec)));
+		hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, ec)));
+
 		auto s2cPidAck = GetS2C_PID_ACK(tmpBuffer);
 		switch (s2cPidAck->code())
 		{
@@ -333,4 +336,8 @@ void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
 			break;
 		}
 	}
+	memset(tmpBuffer, 0, 3000);
+
+	if (receiveLoop == false)
+		return;
 }
