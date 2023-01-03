@@ -19,7 +19,6 @@
 #include "S2C_ROOM_ENTER_ACK_generated.h"
 #include "S2C_ROOM_ENTER_NTY_generated.h"
 
-using boost::asio::ip::tcp;
 
 void MenuSelection();
 void ChattingEcho();
