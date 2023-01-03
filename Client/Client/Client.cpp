@@ -29,7 +29,7 @@ void RecvCharPid(char* buffer);
 void RecvRoomACK(char* buffer);
 void Char_Recv(char *tmpBuffer, const boost::system::error_code& ec);
 void RecvChatACK(char* buffer);
-void OnAccept(const boost::system::error_code& ec);
+void OnConnect(const boost::system::error_code& ec);
 
 static CHAR IP[] = "127.0.0.1";
 static CHAR Port[] = "3587";
@@ -88,7 +88,7 @@ INT main(int argc, char* argv[])
 	
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-	hSocket.async_connect(ep, OnAccept);
+	hSocket.async_connect(ep, OnConnect);
 
 
 	while (mainFinish)
@@ -126,7 +126,7 @@ INT main(int argc, char* argv[])
 	threadGroup.join_all();
 }
 
-void OnAccept(const boost::system::error_code& ec)
+void OnConnect(const boost::system::error_code& ec)
 {
 	char input[3000] = { 0, };
 	io_context.post(m_strand.wrap(boost::bind(Char_Recv, input, error))); 
@@ -302,16 +302,14 @@ void RecvRoomACK(char* buffer)
 
 void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
 {
-	hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, ec)));
 	if (ec)
 	{
 		throw boost::system::system_error(ec);
 	}
-	else if (tmpBuffer[0] == 0 && tmpBuffer[1] == 0 && tmpBuffer[2] == 0)
-	{
-	}
 	else
 	{
+		boost::system::error_code r_ec;
+		hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, r_ec)));
 		auto s2cPidAck = GetS2C_PID_ACK(tmpBuffer);
 		switch (s2cPidAck->code())
 		{
