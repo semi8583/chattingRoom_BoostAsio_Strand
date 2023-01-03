@@ -8,9 +8,7 @@
 #include <boost/shared_ptr.hpp>
 #include <string>
 #include <boost/thread/mutex.hpp>
-#include <SDKDDKVER.h> //이게 없으면 컴파일할 때 warning을 낸다.
-//boost asio를 컴파일하는데, 컴파일하는 윈도우 라이브러리의 버전을 알 수 없다는 에러.
-//이 헤더를 넣으면 경고가 사라지며 깔끔해진다.
+#include <SDKDDKVER.h> 
 #include "flatbuffers/flatbuffers.h"
 #include "C2S_CHATECHO_REQ_generated.h"
 #include "C2S_PID_REQ_generated.h"
@@ -21,30 +19,31 @@
 #include "S2C_ROOM_ENTER_ACK_generated.h"
 #include "S2C_ROOM_ENTER_NTY_generated.h"
 
-using namespace std;
 using boost::asio::ip::tcp;
 
 void MenuSelection();
 void ChattingEcho();
 void ChattingRoom();
-void RecvCharEcho(char* buffer);
-void RecvCharRoom(char* buffer);
+void RecvChatNTY(char* buffer);
+void RecvRoomNTY(char* buffer);
 void RecvCharPid(char* buffer);
-void RecvCharValidRoomNo(char* buffer);
-void Char_Recv(const boost::system::error_code& ec);
+void RecvRoomACK(char* buffer);
+void Char_Recv(char *tmpBuffer, const boost::system::error_code& ec);
+void RecvChatACK(char* buffer);
+void OnAccept(const boost::system::error_code& ec);
 
 static CHAR IP[] = "127.0.0.1";
 static CHAR Port[] = "3587";
 #define BUF_SIZE 1024
 
-//SOCKET hSocket; // 소켓 생성하는 함수
 boost::asio::io_context io_context;
+std::shared_ptr<boost::asio::io_service::work> work(new boost::asio::io_service::work(io_context));
+boost::asio::io_service::strand m_strand(io_context);
 boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string(IP), atoi(Port));
-boost::asio::ip::tcp::socket hSocket(io_context, ep.protocol()); // 소켓과 io_context가 등록
+boost::asio::ip::tcp::socket hSocket(io_context, ep.protocol());
 boost::thread_group threadGroup;
 boost::system::error_code error;
 
-bool threadStop = true;
 bool mainLoop = false;
 bool mainFinish = true;
 
@@ -55,18 +54,26 @@ int MenuNum = 0;
 enum Code
 {
 	NO_CHOICE,
-	CHAT_ECHO,
-	CHAT_ROOM,
+	CHAT_NTY,
+	ROOM_NTY,
 	PID,
-	VALID_ROOM_NO
+	ROOM_ACK,
+	CHAT_ACK
 };
 
-map<int, void(*)(char*)> callbackMap =
+enum RoomResult
 {
-	{1, RecvCharEcho},
-	{2, RecvCharRoom},
+	FAILED_ROOM,
+	SUCCESSED_ROOM
+};
+
+std::map<int, void(*)(char*)> callbackMap =
+{
+	{1, RecvChatNTY},
+	{2, RecvRoomNTY},
 	{3, RecvCharPid},
-	{4, RecvCharValidRoomNo}
+	{4, RecvRoomACK},
+	{5, RecvChatACK}
 };
 
 void WorkerThread()
@@ -76,219 +83,257 @@ void WorkerThread()
 
 INT main(int argc, char* argv[])
 {
-	threadStop = true;
-	hSocket.async_connect(ep, Char_Recv);
-
-	//for (int i = 0; i < 2; ++i) {
-	//	thread{ [&]() {
-	//		io_context.run();
-	//	} }.detach(); // detach 스레드가 언제 종료될지 모른다. 
-	//} // join -> 스레드가 종료되는 시점에 자원을 반환받는 것이 보장 
-
 	for (int i = 0; i < 2; ++i) {
 		threadGroup.create_thread(WorkerThread);
 	} 
+	
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+	hSocket.async_connect(ep, OnAccept);
+
 
 	while (mainFinish)
 	{
 		while (mainLoop)
 		{
 			MenuSelection();
-			cin >> MenuNum;
-			cin.ignore();// 입력 버퍼 초기화
+			std::cin >> MenuNum;
+			std::cin.ignore();
 
-			if (MenuNum == 1) // 채팅 에코
+			if (MenuNum == 1) // Chatting
 			{
+				mainLoop = false;
 				ChattingEcho();
 			}
-			else if (MenuNum == 2) // 채팅룸 입장
+			else if (MenuNum == 2) // Chatting Room
 			{
 				mainLoop = false;
 				ChattingRoom();
 			}
-			else if (MenuNum == 0) // 프로그램종료f
+			else if (MenuNum == 0) // close Program
 			{
 				mainLoop = false;
 				mainFinish = false;
 			}
 			else
 			{
-				cout << "다시 입력해 주세요!" << endl;
+				std::cout << "Please Re-Enter" << std::endl;
 			}
 		}
 	}
-	threadStop = false;
-	cout << "[ACK] 클라이언트 종료" << endl;
+	std::cout << " [ACK] Close Client" << std::endl;
 
 	return 0;
+	threadGroup.join_all();
+}
+
+void OnAccept(const boost::system::error_code& ec)
+{
+	char input[3000] = { 0, };
+	io_context.post(m_strand.wrap(boost::bind(Char_Recv, input, error))); 
 }
 
 void MenuSelection()
 {
-	cout << "메뉴를 선택해 주세요!" << endl;
-	cout << "1. 채팅 에코 메시지 전송" << endl;
-	cout << "2. 채팅 룸 입장" << endl;
-	cout << "0. 프로그램 종료" << endl;
+	std::cout << "Choice Menu( Character will be finish program)" << std::endl;
+	std::cout << "1. Chatting Message" << std::endl;
+	std::cout << "2. Chatting Room" << std::endl;
+	std::cout << "0. Close Program" << std::endl;
 }
 
 void ChattingEcho()
 {
 	flatbuffers::FlatBufferBuilder builder;
-	threadStop = true;
-	cout << "\n채팅 에코 프로그램  " << endl;
-	cout << "\n문자를 입력해주세요: (-1 입력 시 종료) ";
+	std::cout << "\nChatting Program " << std::endl;
+	std::cout << "\nPlease enter the character : (-1 Exit) ";
+
 	while (1)
 	{
 		char input[BUF_SIZE] = { 0, };
 		memset(input, 0, BUF_SIZE);
-		cin.getline(input, BUF_SIZE, '\n');
-		cin.clear();// 입력 버퍼 초기화
+		std::cin.getline(input, BUF_SIZE, '\n');
+		std::cin.clear();
 
-		if (input[0] == '-' && input[1] == '1')    //종료문자 처리
+		if (input[0] == '-' && input[1] == '1')
 		{
-			cout << "클라이언트 종료!" << endl;
-			threadStop = false;
+			MenuNum = 0;
+			mainLoop = true;
 			break;
 		}
-		if (input != "")
-			cout << "문자열 입력 성공!" << endl;
-		int sendReturn;
-
-		builder.Finish(CreateC2S_CHATECHO_REQ(builder, strlen(input) + 16, MenuNum, pid, builder.CreateString(input)));
-		char tmpBuffer[3000] = { 0, };
-		memcpy(&tmpBuffer, builder.GetBufferPointer(), builder.GetSize());
-
-		hSocket.write_some(boost::asio::buffer(tmpBuffer), error);
-		if (error)
+		if (input[0] == '\0') 
 		{
-			sendReturn = 0;
-			cout << "문자열 전송 실패" << endl;
-			
+			std::cout << "you Entered a blank text. Please re-enter" << std::endl;
+			std::cout << "\nPlease enter the character : (-1 Exit) ";
 		}
 		else
 		{
-			sendReturn = 1;
-			cout << "문자열 전송 성공" << endl;
+			int sendReturn;
+
+			builder.Finish(CreateC2S_CHATECHO_REQ(builder, strlen(input) + 16, MenuNum, pid, builder.CreateString(input)));
+			char tmpBuffer[3000] = { 0, };
+			memcpy(&tmpBuffer, builder.GetBufferPointer(), builder.GetSize());
+
+			hSocket.write_some(boost::asio::buffer(tmpBuffer), error);
+			if (error)
+			{
+				sendReturn = 0;
+				std::cout << "Failed to send the character" << std::endl;
+			}
+			else
+			{
+				sendReturn = 1;
+				std::cout << "Seccessed to send the character" << std::endl;
+			}
+			auto c2sEchoReq = GetC2S_CHATECHO_REQ(builder.GetBufferPointer());
+
+			std::cout << "\n [REQ] [send] " << "Total buffer Size: \"" << c2sEchoReq->size() << "\" Code: \"" << c2sEchoReq->code() << "\" Result: \"" << sendReturn << "\" , String: \"" << c2sEchoReq->msg()->c_str() << "\" from " << pid << " client " << std::endl;
 		}
-		auto c2sEchoReq = GetC2S_CHATECHO_REQ(builder.GetBufferPointer());
-		cout << "\n[REQ] [send] " << "총 버퍼 사이즈: \"" << c2sEchoReq->size() << "\" Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << c2sEchoReq->code() << "\" Result(문자열 전송 성공: 1, 문자열 전송 실패: 0): \"" << sendReturn  << "\" , 문자열: \"" << c2sEchoReq->msg()->c_str() << "\" from " << pid << " 번째 client " << endl;
+		builder.Clear();
 	}
-	cout << "\n채팅 에코 프로그램  종료" << endl;
-	builder.Clear();
+	std::cout << "\nChatting Program Closed" << std::endl;
 }
 
-void ChattingRoom()
+void ChattingRoom() 
 {
 	flatbuffers::FlatBufferBuilder builder;
-	threadStop = true;
-	cout << "\n채팅 룸 프로그램  " << endl;
-	cout << "\n입장할 채팅 방 번호를 입력 하세요!: (-2 입력시 종료) ";
+	std::cout << "\nChatting Room Program " << std::endl;
+	std::cout << "\nPlease enter the chatting room No!: (-2 Exit, When you enter character / no enter will be room no. 0 ) ";
 
 	char input[BUF_SIZE] = { 0, };
 	memset(input, 0, BUF_SIZE);
-	cin.getline(input, BUF_SIZE, '\n');
-	cin.clear();// 입력 버퍼 초기화
+	std::cin.getline(input, BUF_SIZE, '\n');
+	std::cin.clear();
 
 	int roomNo;
-	if (strlen(input) == 0 || atoi(input) == 0)
-		roomNo = 0; // 방 번호 입력 안할시 -1번 방 선택
+	if (strlen(input) == 0)
+		roomNo = 0; 
 	else
-		roomNo = atoi(input); // 1번방 또는 2번 방
+		roomNo = atoi(input);
 
-	if (roomNo == -2)    //종료문자 처리
+	if (roomNo == -2)  
 	{
-		threadStop = false;
-		cout << "\n채팅 룸 프로그램  종료" << endl;
+		MenuNum = 0;
+		std::cout << "\nChatting room closed" << std::endl;
 		mainLoop = true;
 	}
-	else // 방 번호 서버에서 확인
+	else // check the room no in the server
 	{
 		builder.Finish(CreateC2S_ROOM_ENTER_REQ(builder, 16, 4, roomNo, pid));
 		char tmpBuffer[BUF_SIZE] = { 0, };
 		memcpy(&tmpBuffer, builder.GetBufferPointer(), builder.GetSize());
 		hSocket.write_some(boost::asio::buffer(tmpBuffer), error);
 	}
-	builder.Clear();
 }
 
-void RecvCharEcho(char* buffer)
+void RecvChatNTY(char* buffer)
 {
 	flatbuffers::FlatBufferBuilder builder;
 	auto s2cEchoNty = GetS2C_CHATECHO_NTY(buffer);
-	builder.Finish(CreateC2S_CHATECHO_REQ(builder, s2cEchoNty->size() , s2cEchoNty->code(), s2cEchoNty->userIdx(), builder.CreateString(s2cEchoNty->msg()->c_str())));
-	auto c2sEchoReq = GetC2S_CHATECHO_REQ(builder.GetBufferPointer());
 
-	cout << "\n[NTY] [recv] msg received. 총 버퍼 사이즈 : \"" << c2sEchoReq->size() << "\", Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << c2sEchoReq->code()  << "\" , 문자열: \"" << c2sEchoReq->msg()->c_str() << "\" from server \"" << c2sEchoReq->userIdx() << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
+	std::cout << "\n [NTY] [recv] msg received. Total Buffer size : \"" << s2cEchoNty->size() << "\", Code: \"" << s2cEchoNty->code()  << "\" , string: \"" << s2cEchoNty->msg()->c_str() << "\" from server \"" << s2cEchoNty->userIdx() << "\" Client" << std::endl;
 	if (MenuNum == 1)
-		cout << "\n문자를 입력해주세요: (-1 입력 시 종료) ";
-	else if (MenuNum != 2)
+		std::cout << "\n please enter the string: (-1 Exit) ";
+	else if(MenuNum == 2)
+		std::cout << "\n please enter the chatting room number!: (-2 Exit) ";
+	else
 		MenuSelection();
-	builder.Clear();
+	mainLoop = true;
+
 }
 
-void RecvCharRoom(char* buffer)
+void RecvChatACK(char* buffer)
+{
+	flatbuffers::FlatBufferBuilder builder;
+	auto s2cEchoACK = GetS2C_CHATECHO_ACK(buffer);
+
+	std::cout << "\n [ACK] [recv] msg received. Total Buffer size : \"" << s2cEchoACK->size() << "\", Code: \"" << s2cEchoACK->code() << "\" , string: \"" << s2cEchoACK->msg()->c_str() << "\" , Result: \"" << s2cEchoACK->result() << "\" Client" << std::endl;
+	if (MenuNum == 1)
+		std::cout << "\n please enter the string: (-1 Exit) ";
+	else if (MenuNum == 2)
+		std::cout << "\n please enter the chatting room number!: (-2 Exit) ";
+	else
+		MenuSelection();
+	mainLoop = true;
+}
+
+void RecvRoomNTY(char* buffer)
 {
 	auto s2cRoomNty = GetS2C_ROOM_ENTER_NTY(buffer);
 
-	cout << "\n [NTY] [recv] msg received. 총 버퍼 사이즈 : \"" << s2cRoomNty->size() << "\", Code(채팅 에코:1, 채팅 룸:2, 방 번호 유무:4): \"" << s2cRoomNty->code() << "\", Room No: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" 번째 Client" << endl;// 받은 숫자를 콘솔 창에 출력
-	mainLoop = true;
-
+	std::cout << "\n [NTY] [recv] msg received. Total Buffer size : \"" << s2cRoomNty->size() << "\", Code: \"" << s2cRoomNty->code() << "\", Room No: \"" << s2cRoomNty->roomNo() << "\" from server \"" << s2cRoomNty->userIdx() << "\" Client" << std::endl;
+	
 	if (MenuNum == 1)
-		cout << "\n문자를 입력해주세요: (-1 입력 시 종료) ";
-	else if (MenuNum != 2)
+		std::cout << "\n please enter the string: (-1 Exit) ";
+	else if (MenuNum == 2)
+		std::cout << "\n please enter the chatting room number!: (-2 Exit) ";
+	else
 		MenuSelection();
+	mainLoop = true;
 }
 
 void RecvCharPid(char* buffer)
 {
 	auto s2cPidAck = GetS2C_PID_ACK(buffer);
-	cout << "\n [ACK] 유저 번호: " << s2cPidAck->pid() << endl;
 	pid = s2cPidAck->pid();
+	std::cout << "\n [ACK] User No. : " << pid << std::endl;
 }
 
-void RecvCharValidRoomNo(char* buffer)
+void RecvRoomACK(char* buffer)
 {
+	flatbuffers::FlatBufferBuilder builder;
 	auto s2cRoomAck = GetS2C_ROOM_ENTER_ACK(buffer);
 
 	if (s2cRoomAck->result() == 0)
 	{
-		cout << "[ACK] 없는 방 입니다. 방을 다시 입력 하세요" << endl;
-		mainLoop = true;
+		std::cout << " [ACK] No room. please re-enter the room No " << std::endl;
 	}
+	else
+	{
+		std::cout << "\n [ACK] [recv] msg received. Total Buffer Size: \"" << s2cRoomAck->size() << "\", Code: \"" << s2cRoomAck->code() << "\" , Room No: \"" << s2cRoomAck->roomNo() << "\" , Result: \"" << s2cRoomAck->result() << std::endl;
+	}
+
+	if (MenuNum == 1)
+		std::cout << "\n please enter the string: (-1 Exit) ";
+	else if (MenuNum == 2)
+		std::cout << "\n please enter the chatting room number!: (-2 Exit)  ";
+	else
+		MenuSelection();
+	mainLoop = true;
 }
 
-void Char_Recv(const boost::system::error_code& ec)//클라이언트에서 문자열 입력을 받는 도중에 서버에서 문자열을 받으면 스레드를 이용해서 밑에 함수 실행함
+void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
 {
-	while (threadStop) // 소켓이 돌고 있으므로 소켓 먼저 종료 시키고 스레드 종료 시키면 정상 종료
+	hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, ec)));
+	if (ec)
 	{
-		char tmpBuffer[3000] = { 0, };
-		hSocket.read_some(boost::asio::buffer(tmpBuffer), error);
-		if (error)
+		throw boost::system::system_error(ec);
+	}
+	else if (tmpBuffer[0] == 0 && tmpBuffer[1] == 0 && tmpBuffer[2] == 0)
+	{
+	}
+	else
+	{
+		auto s2cPidAck = GetS2C_PID_ACK(tmpBuffer);
+		switch (s2cPidAck->code())
 		{
-			//throw boost::system::system_error(error);
+		case Code::NO_CHOICE:
+			break;
+		case Code::CHAT_NTY:
+			callbackMap[CHAT_NTY](tmpBuffer);
+			break;
+		case Code::ROOM_NTY:
+			callbackMap[ROOM_NTY](tmpBuffer);
+			break;
+		case Code::PID:
+			callbackMap[PID](tmpBuffer);
+			mainLoop = true;
+			break;
+		case Code::ROOM_ACK:
+			callbackMap[ROOM_ACK](tmpBuffer);
+			break;
+		case Code::CHAT_ACK:
+			callbackMap[CHAT_ACK](tmpBuffer);
+			break;
 		}
-		else
-		{ 
-			auto s2cPidAck = GetS2C_PID_ACK(tmpBuffer);
-			switch (s2cPidAck->code())
-			{
-			case Code::NO_CHOICE:
-				break;
-			case Code::CHAT_ECHO:
-				callbackMap[CHAT_ECHO](tmpBuffer);
-				break;
-			case Code::CHAT_ROOM:
-				callbackMap[CHAT_ROOM](tmpBuffer);
-				break;
-			case Code::PID:
-				callbackMap[PID](tmpBuffer);
-				mainLoop = true;
-				break;
-			case Code::VALID_ROOM_NO:
-				callbackMap[VALID_ROOM_NO](tmpBuffer);
-				break;
-			}
-		}
-		memset(tmpBuffer, 0, BUF_SIZE);
 	}
 }
