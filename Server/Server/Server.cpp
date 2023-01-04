@@ -155,7 +155,7 @@ private:
 		sessions.push_back(std::shared_ptr<Session>(session));
 		std::cout << "[" << boost::this_thread::get_id() << "]" << " Client Accepted" << std::endl;
 
-		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, error))); 
+		ios.post(m_strand.wrap(boost::bind(&Server::Receive, this, session, error, 1)));
 		StartAccept();
 
 		osf << session->userIndex << " st client access" << std::endl;
@@ -166,17 +166,12 @@ private:
 		osf << TimeResult() << " [ACK] Port No: " << port << " User " << session->userIndex << " st client" << std::endl;
 	}
 
-	void Receive(std::shared_ptr<Session> session, const boost::system::error_code& ec)
+	void Receive(std::shared_ptr<Session> session, const boost::system::error_code& e, std::size_t bytes_transferred)
 	{
-		if (ec)
+		if(!e && bytes_transferred)
 		{
-			osf << "[" << boost::this_thread::get_id() << "] read failed: " << ec.message() << std::endl;
-			CloseSession(session);
-			return;
-		}
-		else
-		{
-			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, ec)));
+			session->sock->async_read_some(boost::asio::buffer(session->buffer), m_strand.wrap(boost::bind(&Server::Receive, this, session, boost::asio::placeholders::error,
+				boost::asio::placeholders::bytes_transferred)));
 
 			auto s2cPidAck = GetS2C_PID_ACK(session->buffer);
 			int code = 100;
@@ -191,6 +186,12 @@ private:
 				RecvCharValidRoomNo(session);
 				break;
 			}
+		}
+		else
+		{
+			osf << "[" << boost::this_thread::get_id() << "] read failed: " << e.what() << std::endl;
+			CloseSession(session);
+			return;
 		}
 		memset(session->buffer, 0, 3000);
 	}
