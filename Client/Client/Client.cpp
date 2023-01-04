@@ -26,9 +26,9 @@ void ChattingRoom();
 void RecvChatNTY(char* buffer);
 void RecvRoomNTY(char* buffer);
 void RecvCharPid(char* buffer);
-void RecvRoomACK(char* buffer);
-void Char_Recv(char *tmpBuffer, const boost::system::error_code& ec);
+void Char_Recv(char* tmpBuffer, const boost::system::error_code& e, std::size_t bytes_transferred);
 void RecvChatACK(char* buffer);
+void RecvRoomACK(char* buffer);
 void OnConnect(const boost::system::error_code& ec);
 
 static CHAR IP[] = "127.0.0.1";
@@ -131,7 +131,7 @@ INT main(int argc, char* argv[])
 void OnConnect(const boost::system::error_code& ec)
 {
 	char input[3000] = { 0, };
-	io_context.post(m_strand.wrap(boost::bind(Char_Recv, input, error))); 
+	io_context.post(m_strand.wrap(boost::bind(Char_Recv, input, error, 1))); 
 }
 
 void MenuSelection()
@@ -302,16 +302,12 @@ void RecvRoomACK(char* buffer)
 	mainLoop = true;
 }
 
-void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
+void Char_Recv(char* tmpBuffer, const boost::system::error_code& e, std::size_t bytes_transferred)
 {
-	if (ec)
+	if (!e && bytes_transferred)
 	{
-		throw boost::system::system_error(ec);
-		return;
-	}
-	else
-	{
-		hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, ec)));
+		hSocket.async_read_some(boost::asio::buffer(tmpBuffer, 3000), m_strand.wrap(boost::bind(Char_Recv, tmpBuffer, boost::asio::placeholders::error,
+			boost::asio::placeholders::bytes_transferred)));
 
 		auto s2cPidAck = GetS2C_PID_ACK(tmpBuffer);
 		switch (s2cPidAck->code())
@@ -335,6 +331,12 @@ void Char_Recv(char* tmpBuffer, const boost::system::error_code& ec)
 			callbackMap[CHAT_ACK](tmpBuffer);
 			break;
 		}
+	}
+	else
+	{
+		mainLoop = false;
+		mainFinish = false;
+		return;
 	}
 	memset(tmpBuffer, 0, 3000);
 
